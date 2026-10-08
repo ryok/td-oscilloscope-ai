@@ -16,7 +16,7 @@
 | # | 内容 | 状態 |
 |---|---|---|
 | S1 | オシロスコープ映像（XY・波形・極座標＋残光） | 済 |
-| S2 | 自作 StreamDiffusion に送り、拡散の効き方を調整 | |
+| S2 | 自作 StreamDiffusion に送り、拡散の効き方を調整 | 済 |
 | S3 | 曲のセクションごとにプロンプト・強さを切り替える | |
 | S4 | スコープ用の曲を作る | |
 | S5 | 本番録画と公開 | |
@@ -71,6 +71,54 @@ aud_in（あれば）─────────────────┴ osc_
 - **実曲は XY でほぼ右上がりの斜線になる**。ふつうのミックスは左右がほぼ同じ（モノラル寄り）なので、
   x≒y に集まる。マスタリング済みの曲は `gain=0.85` だと枠の端で切れる。図形として見せるには、
   曲側でステレオの位相を設計するか、`gain` を下げる。
+
+## AI 変換（AI Bridge）
+
+`osc_out` を自作の StreamDiffusion サーバー（[streamdiffusion-ws](https://github.com/ryok/streamdiffusion-ws)）へ
+WebSocket で送り、変換結果を `/project1/ai_out` に受ける。音が大きいほど変換を強くする（t_index を下げる）。
+
+1. GPU 側でサーバーを起動する（GPU 番号は `nvidia-smi` で空きを見て選ぶ）
+   ```
+   CUDA_VISIBLE_DEVICES=2 python -u sd_ws_server.py --size 384 --acceleration xformers \
+     --t-index 22 32 --guidance-scale 5 --cfg-type full --out-quality 50 --port 8765 \
+     --prompt "intricate glowing neon wire sculpture, liquid chrome filaments, dark background, cinematic light, highly detailed"
+   ```
+2. Mac から SSH トンネルで 8765 を繋ぐ（`ssh -N -L 8765:localhost:8765 <gpu-host>`）
+3. TD で [scripts/build_oscilloscope.py](scripts/build_oscilloscope.py) → [scripts/build_ai_bridge.py](scripts/build_ai_bridge.py) の順に実行
+4. 別の操作で `op('/project1/websocket1').par.active = 1`（同じスクリプト内で 0→1 にしても繋がらない）
+5. `/project1/ai_out` を見る
+
+![ai frames](reference/s2_ai_frames.jpg)
+
+（実曲を流して録画した 26 秒から2秒おきに切り出したフレーム。上段から下段の途中までが XY、下段右2枚が極座標。
+音の大きさに合わせて t_index が [14,24]〜[6,16] の間で動いている。）
+
+### 設計のポイント
+
+- **td-organic-patterns の AI Bridge の移植**。送信元を `osc_out` に、音の大きさを `ai_energy`（`osc_lr` の
+  RMS を左右で平均し、Lag で上がり 0.05 秒・下がり 0.4 秒にならしたもの）に替えた。オシロが描いている音
+  そのものの大きさで変換の強さが動く。
+- **t_index の範囲は油膜の時より強い側にずらした**。テスト音の XY で比べた結果:
+
+  | t_index | 黒地の細い線がどうなるか |
+  |---|---|
+  | [22,32]・[12,22]（organic-patterns の範囲） | ほぼそのまま返る |
+  | [10,20] | 線の形を保ったままネオン管の質感になり、床に反射が出る |
+  | [6,16] | 形が崩れて別の物（ネオンの花）になる |
+
+  油膜は画面全体に模様があるが、オシロは大半が黒で、拡散モデルが手がかりにできる情報が少ない。
+  そのため同じ強さでは何も起きない。無音で [14,24]（形が読める）、大音量で [6,16]（形が溶ける）に写す。
+- **音の大きさは下限から写す**（`E_FLOOR=0.12`〜`E_FULL=0.4`）。実曲 12 秒の RMS は p5=0.13・中央値=0.27・
+  p95=0.39 だった。0 起点で写すと、静かな所でも半分以上の強さになって形が残らない。
+
+### 実装上の要点（ハマりどころ）
+
+- **Math CHOP で左右を平均するのは `chanop`（Combine Channels）**。`chopop` は複数の入力 CHOP どうしの演算で、
+  入力が1つだと何もしない（`l` と `r` の2チャンネルのまま出てきた）。
+- **マスタリング済みの曲は XY で四角い枠が出る**。リミッターで ±1 に張り付いたサンプルが枠の辺に並び、
+  AI もそれを「額縁」として描く（上の画像の上段）。曲側（S4）で解決する予定（`gain` を下げたときの見え方はまだ試していない）。
+- **フレームレートは GPU の混み具合で変わる**。共有の GPU で他のジョブが使用率 100% のとき、4〜10fps
+  （中央値 4.9fps）だった。
 
 ## 動作環境
 
