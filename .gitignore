@@ -1,0 +1,12 @@
+# TouchDesigner
+*.toe
+*.toebak
+Backup/
+*.dir/
+
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
