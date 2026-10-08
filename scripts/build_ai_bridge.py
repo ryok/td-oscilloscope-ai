@@ -133,6 +133,36 @@ def last_ta():
     return _last_tindex[0]
 
 
+# --- プロンプト差し替え（build_sections.py が使う） ---
+# 画像・TINDEX と同じ in-flight 枠を使うので、ここでは予約だけして、ai_driver が
+# 次の送信スロットで最優先に送る（返信待ち中に直接送ると取りこぼす）。
+_pending_prompt = None
+_prompt_sent_at = None
+prompt_rtt = []          # 送信から OK:prompt updated までの秒数（切り替え時の止まりの実測）
+
+
+def request_prompt(text):
+    global _pending_prompt
+    _pending_prompt = text
+
+
+def has_pending_prompt():
+    return _pending_prompt is not None
+
+
+def send_pending_prompt(dat):
+    global _inflight, _sent_at, _pending_prompt, _prompt_sent_at
+    if _pending_prompt is None or not _guard_open():
+        return
+    try:
+        dat.sendText('PROMPT:' + _pending_prompt)
+        _inflight = True
+        _sent_at = _prompt_sent_at = absTime.seconds
+        _pending_prompt = None
+    except Exception as e:
+        debug('send_prompt err:', e)
+
+
 def onConnect(dat):
     global _inflight
     _inflight = False
@@ -147,8 +177,12 @@ def onDisconnect(dat):
 
 def onReceiveText(dat, rowIndex, message, *args):
     global _latest_jpg_b64, _inflight
+    global _prompt_sent_at
     _inflight = False
     if message.startswith('OK:') or message.startswith('ERR:'):
+        if message.startswith('OK:prompt') and _prompt_sent_at is not None:
+            prompt_rtt.append(absTime.seconds - _prompt_sent_at)
+            _prompt_sent_at = None
         debug('[ws] server:', message)
         return
     _latest_jpg_b64 = message
@@ -226,6 +260,9 @@ E_FULL = 0.4
 # 無音=形が読める側(14,24) → 大音量=形が崩れる側(6,16)。音が大きい所で図形が溶ける。
 TA_BASE, TA_MIN = 14, 6    # t_index[0]
 TB_BASE, TB_MIN = 24, 16   # t_index[1]
+# build_sections.py があれば、セクションごとの範囲（sec_state の ta_q/tb_q=無音側、
+# ta_l/tb_l=大音量側）で上の既定を置き換える
+SEC = '/project1/sec_state'
 
 
 def _clamp(x, lo, hi):
@@ -248,8 +285,17 @@ def onFrameStart(frame):
     if al is not None and al.numChans:
         e = al[0].eval()
     n = _clamp((e - E_FLOOR) / (E_FULL - E_FLOOR), 0.0, 1.0)
-    ta = int(round(TA_BASE - (TA_BASE - TA_MIN) * n))
-    tb = int(round(TB_BASE - (TB_BASE - TB_MIN) * n))
+    taq, tal, tbq, tbl = TA_BASE, TA_MIN, TB_BASE, TB_MIN
+    sec = op(SEC)
+    if sec is not None:
+        taq, tal = sec['ta_q'].eval(), sec['ta_l'].eval()
+        tbq, tbl = sec['tb_q'].eval(), sec['tb_l'].eval()
+    ta = int(round(taq - (taq - tal) * n))
+    tb = int(round(tbq - (tbq - tbl) * n))
+    # セクション切り替えのプロンプトは最優先（予約があれば今回のスロットはそれだけ送る）
+    if cb.has_pending_prompt():
+        cb.send_pending_prompt(ws)
+        return
     # 画像フレームを主に流し、TINDEXは数スロットに1回だけ相乗りさせる。
     # ★2026-09-11の録画で判明: 画像とTINDEXは同じin-flight枠を1スロット1回で共有する。
     #   毎回TINDEXを送ると（大音量でenergyが揺れ changed がほぼ毎回true）画像が枯れ、
