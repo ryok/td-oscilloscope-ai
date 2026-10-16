@@ -10,3 +10,7 @@ Backup/
 # Python
 __pycache__/
 *.pyc
+
+# Ableton
+Ableton Project Info/
+Icon?

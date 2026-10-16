@@ -16,6 +16,7 @@ sec_table の列
   bars    そのセクションの長さ（小節）
   name    名前（表示用）
   mode    0=XY / 1=波形 / 2=極座標
+  gain    振幅→画面の倍率（osc_ctrl の gain）。空欄なら変えない
   quiet   無音のときの t_index（"14,24" の形）。大きいほど元の形に忠実
   loud    大音量のときの t_index（"6,16"）。小さいほど AI の読み替えが強い
   prompt  そのセクションで AI に描かせるもの
@@ -31,7 +32,7 @@ sec_table の列
   op('/project1/sec_driver').module.auto(True) # 時計で進める状態に戻す（cue もし直す）
 
   Ableton のシーンに合わせて即興で切り替えるときは、go() を MIDI / OSC の受け口から呼ぶ
-  （S4 で Ableton 側のセットを作るときに配線する）。
+  （未配線。S4 の曲は Arrangement を頭から流し、auto(True) で揃える）。
 
 前提: build_oscilloscope.py → build_ai_bridge.py を実行済み。
 """
@@ -53,16 +54,21 @@ PARENT = '/project1'
 BPM = 88.0              # Link に相手がいないときの内部時計（前作の自作曲と同じテンポ）
 X0, Y0 = -600, 700
 
-# 仮のセクション（S4 で曲ができたら差し替える）。88BPM の8小節 ≈ 22秒
+# 自作曲（S4、88BPM・各8小節 ≈ 22秒）の構成に合わせたセクション。
+#   intro: 左右とも D3。右は位相90°・0.2% 高い → 円 ↔ 斜線を約3.4秒周期で行き来する
+#   build: 左 D3 に対して右が2小節ごとに 3:2 → 4:3 → 2:1 → 5:4。XY でリサージュ図形が順に変わる
+#   peak : 3:2 を8分で刻む＋ドラム・ベース（中央）。極座標で音の荒さがとげとげの輪になる
+#   break: 左右同じ和音のアルペジオ。波形モードで和音の重なりが波の形になる
+#   （極座標は 1/60 秒に D3 が2.4周しか入らず輪が閉じないので、純音の区間では使わない）
 SECTIONS = [
-    # bars, name,    mode, quiet,   loud,    prompt
-    (8, 'intro', 0, '16,26', '10,20',
+    # bars, name,    mode, gain, quiet,   loud,    prompt
+    (8, 'intro', 0, 2.6, '16,26', '10,20',
      'intricate glowing neon wire sculpture, liquid chrome filaments, dark background, cinematic light, highly detailed'),
-    (8, 'build', 2, '14,24', '8,18',
+    (8, 'build', 0, 2.6, '14,24', '8,18',
      'folded white origami paper sculpture, sharp creases, soft studio light, minimal, highly detailed'),
-    (8, 'peak', 0, '10,20', '6,16',
+    (8, 'peak', 2, 1.0, '10,20', '6,16',
      'molten iridescent liquid metal splash, rainbow chrome, macro photography, dramatic light'),
-    (8, 'break', 1, '16,26', '12,22',
+    (8, 'break', 1, 2.2, '16,26', '12,22',
      'sumi-e ink brush stroke on rice paper, black ink, minimal, japanese calligraphy'),
 ]
 
@@ -140,6 +146,10 @@ def _apply(i):
     c = op(CTRL)
     if c is not None:
         c.par.value0 = int(r['mode'])
+        if r.get('gain'):
+            for k in range(8):
+                if getattr(c.par, 'name%%d' %% k).eval() == 'gain':
+                    setattr(c.par, 'value%%d' %% k, float(r['gain']))
     cb = op(CB)
     if cb is not None:
         cb.module.request_prompt(r['prompt'])
@@ -203,13 +213,13 @@ def build_sections():
 
     t = tdb.ensure(p, 'sec_table', 'tableDAT', X0, Y0)
     t.clear()
-    t.appendRow(['bars', 'name', 'mode', 'quiet', 'loud', 'prompt'])
+    t.appendRow(['bars', 'name', 'mode', 'gain', 'quiet', 'loud', 'prompt'])
     for row in SECTIONS:
         t.appendRow([str(v) for v in row])
 
     st = tdb.ensure(p, 'sec_state', 'constantCHOP', X0 + 160, Y0)
-    q0, q1 = [int(x) for x in SECTIONS[0][3].split(',')]
-    l0, l1 = [int(x) for x in SECTIONS[0][4].split(',')]
+    q0, q1 = [int(x) for x in SECTIONS[0][4].split(',')]
+    l0, l1 = [int(x) for x in SECTIONS[0][5].split(',')]
     for i, (k, v) in enumerate([('index', 0), ('ta_q', q0), ('tb_q', q1), ('ta_l', l0), ('tb_l', l1)]):
         tdb.set_pars(st, {f'name{i}': k, f'value{i}': v})
 
