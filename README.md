@@ -19,7 +19,7 @@
 | S2 | 自作 StreamDiffusion に送り、拡散の効き方を調整 | 済 |
 | S3 | 曲のセクションごとにプロンプト・強さを切り替える | 済 |
 | S4 | スコープ用の曲を作る | 済 |
-| S5 | 本番録画と公開 | |
+| S5 | 本番録画と公開 | 録画済み・公開前 |
 
 ## 使い方
 
@@ -215,6 +215,28 @@ Arrangement に並べてある。音源は Live 標準の Operator と 909 Core 
   （音の打ち直しの瞬間）。
 - Ableton シーン → `go()` の MIDI/OSC 配線はしていない。Arrangement を頭から流して `auto(True)` で揃える運用にした
   （内部時計 88BPM。境界ちょうどのずれは測っていない）。
+
+## 本番録画（Recorder）
+
+[scripts/build_recorder.py](scripts/build_recorder.py) で、オシロ（左）と AI の変換結果（右）を 1280×640 に並べ、
+`aud_in` の音と一緒に `rec_pair_out`（Movie File Out）で録る。
+
+1. GPU サーバーを起動し、トンネルを張る（「AI 変換」の節）。録画の直前に `websocket1` を active 0 → 1 で繋ぎ直す
+2. `rec_pair_out` の `record` を True → Ableton を頭から再生 → `sec_driver.module.auto(True)`
+3. 曲の終わり（約88秒）で Ableton を止め、`record` を False
+4. ffmpeg で音の頭に合わせて切り、H.264＋AAC にする。AI だけの版は右半分を切り出す（`crop=640:640:640:0`）
+
+![s5 frames](reference/s5_frames.jpg)
+
+（2026-10-17 の録画から。左右ペアで上から intro・build・peak・break。）
+
+### 実装上の要点（ハマりどころ）
+
+- **Layout TOP は出力解像度を明示する**。既定のままだと 640×640 の中に2枚を縮めて並べ、上下に黒帯が出た。
+- **トンネルの後片付けで `lsof -ti tcp:8765 | xargs kill` をしない**。8765 に繋いでいる TouchDesigner
+  （WebSocket DAT）まで落ちる。止めるのは tunnel.sh の PID と、待ち受け側（`lsof -ti tcp:8765 -sTCP:LISTEN`）だけ。
+- **AI の更新は約2.4fps**だった（88秒で約215回）。サーバー側の1枚あたりの処理は中央値 293ms（p90 400ms）。
+  共有 GPU（RTX 6000 Ada）で他のジョブと取り合っている。
 
 ## 動作環境
 

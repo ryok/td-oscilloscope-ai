@@ -14,3 +14,7 @@ __pycache__/
 # Ableton
 Ableton Project Info/
 Icon?
+
+# 録画（大きいので必要なものだけ個別に入れる）
+reference/*.mov
+reference/s5_final_*.mp4
