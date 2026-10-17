@@ -232,7 +232,9 @@ Arrangement に並べてある。音源は Live 標準の Operator と 909 Core 
 
 ### 実装上の要点（ハマりどころ）
 
-- **Layout TOP は出力解像度を明示する**。既定のままだと 640×640 の中に2枚を縮めて並べ、上下に黒帯が出た。
+- **左右に並べるのに Layout TOP を使わない**。既定では 640×640 の中に2枚を縮めて並べ、出力を 1280×640 に指定しても、
+  各マスの中身が縦に半分につぶれた（3回目までの録画はつぶれたまま録れていた）。Crop TOP の負の切り抜き
+  （左は right=2、右は left=-1、extend=zero）でキャンバスを広げ、Composite TOP の add で重ねる。
 - **トンネルの後片付けで `lsof -ti tcp:8765 | xargs kill` をしない**。8765 に繋いでいる TouchDesigner
   （WebSocket DAT）まで落ちる。止めるのは tunnel.sh の PID と、待ち受け側（`lsof -ti tcp:8765 -sTCP:LISTEN`）だけ。
 - **AI が遅いときは、同じ GPU に他人のジョブが載っていないかを見る**。1回目の録画は AI の更新が約2.4fps
