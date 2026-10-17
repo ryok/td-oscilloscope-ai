@@ -236,7 +236,7 @@ Arrangement に並べてある。音源は Live 標準の Operator と 909 Core 
 - **トンネルの後片付けで `lsof -ti tcp:8765 | xargs kill` をしない**。8765 に繋いでいる TouchDesigner
   （WebSocket DAT）まで落ちる。止めるのは tunnel.sh の PID と、待ち受け側（`lsof -ti tcp:8765 -sTCP:LISTEN`）だけ。
 - **AI の更新は約2.4fps**だった（88秒で約215回）。サーバー側の1枚あたりの処理は中央値 293ms（p90 400ms）。
-  共有 GPU（RTX 6000 Ada）で他のジョブと取り合っている。
+  原因は未特定（録画直前の GPU1 の使用率は0%だった。S2 の時は 4〜10fps 出ていた）。
 
 ## 動作環境
 
