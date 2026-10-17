@@ -228,15 +228,26 @@ Arrangement に並べてある。音源は Live 標準の Operator と 909 Core 
 
 ![s5 frames](reference/s5_frames.jpg)
 
-（2026-10-17 の録画から。左右ペアで上から intro・build・peak・break。）
+（2026-10-17 の録画（3回目）から。左右ペアで上から intro・build・peak・break。）
 
 ### 実装上の要点（ハマりどころ）
 
 - **Layout TOP は出力解像度を明示する**。既定のままだと 640×640 の中に2枚を縮めて並べ、上下に黒帯が出た。
 - **トンネルの後片付けで `lsof -ti tcp:8765 | xargs kill` をしない**。8765 に繋いでいる TouchDesigner
   （WebSocket DAT）まで落ちる。止めるのは tunnel.sh の PID と、待ち受け側（`lsof -ti tcp:8765 -sTCP:LISTEN`）だけ。
-- **AI の更新は約2.4fps**だった（88秒で約215回）。サーバー側の1枚あたりの処理は中央値 293ms（p90 400ms）。
-  原因は未特定（録画直前の GPU1 の使用率は0%だった。S2 の時は 4〜10fps 出ていた）。
+- **AI が遅いときは、同じ GPU に他人のジョブが載っていないかを見る**。1回目の録画は AI の更新が約2.4fps
+  （サーバー側 中央値 293ms/枚）だった。測り分けると:
+
+  | 測ったもの | 結果 |
+  |---|---|
+  | GPU 単体の推論（[scripts/bench_sd.py](scripts/bench_sd.py)、cfg full・384px） | 中央値 58ms、ただし p90 259ms（ときどき跳ねる） |
+  | JPEG の復号・符号化 | 各1ms 前後 |
+  | Mac → トンネル → サーバー → Mac の往復（他のジョブが抜けた後） | 中央値 75ms（13fps） |
+
+  `nvidia-smi --query-compute-apps` で、録画中は GPU1 に他のユーザーのプロセスが4つ載っていた。
+  `nvidia-smi` の使用率は瞬間値なので「0%」でも当てにならない。抜けた後に録り直すと、サーバー側は
+  中央値 55ms、TD 側の AI 更新は約8fps（88秒で約730回）になった。
+- TD 側が 13fps まで届かないのは、返信待ちの枠が1つで、4回に1回は強さ（TINDEX）の送信に使うため。
 
 ## 動作環境
 
