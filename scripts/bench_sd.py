@@ -1,4 +1,4 @@
-# サーバー（p-team-17）の StreamDiffusion ディレクトリに置いて実行する: CUDA_VISIBLE_DEVICES=1 ../.venv/bin/python bench_sd.py --cfg full
+# GPU サーバーの StreamDiffusion ディレクトリに置いて実行する: CUDA_VISIBLE_DEVICES=1 ../.venv/bin/python bench_sd.py --cfg full
 # sd_ws_server と同じ初期化で、1枚あたりの時間を 復号/推論/符号化 に分けて測る
 import sys, time, io, base64, statistics as st
 sys.path.insert(0, '.')
