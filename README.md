@@ -19,7 +19,7 @@
 | S2 | 自作 StreamDiffusion に送り、拡散の効き方を調整 | 済 |
 | S3 | 曲のセクションごとにプロンプト・強さを切り替える | 済 |
 | S4 | スコープ用の曲を作る | 済 |
-| S5 | 本番録画と公開 | 録画済み・公開前 |
+| S5 | 本番録画と公開 | 済（[note](https://note.com/ryok/n/ne6f4ad7147ea)・[X](https://x.com/riokadamusic/status/2111554285326778389)） |
 
 ## 使い方
 
