@@ -76,6 +76,40 @@ _sent_at = 0.0
 TIMEOUT = 3.0
 _last_tindex = (22, 32)
 
+# --- 送受信の回数（README の fps の説明を実測で確かめるため） ---
+# sent_*: 実際に送れた回数 / skip: 返信待ちで送れなかったスロット / timeout: 返信が来ず枠を開けた回数
+# recv_*: 受け取った回数（img=画像、ok=OK:〜、err=ERR:〜）/ rtt_*: 送信から返信までの秒数（全種類）
+stats = {}
+_stats_t0 = 0.0
+
+
+def stats_reset():
+    global _stats_t0
+    stats.clear()
+    stats.update({'sent_img': 0, 'sent_tindex': 0, 'sent_prompt': 0, 'skip': 0, 'timeout': 0,
+                  'recv_img': 0, 'recv_ok': 0, 'recv_err': 0, 'rtt_sum': 0.0, 'rtt_n': 0})
+    _stats_t0 = absTime.seconds
+
+
+def stats_report():
+    """stats_reset() からの回数と、1秒あたりの回数・返信の平均秒数を返す。"""
+    sec = max(absTime.seconds - _stats_t0, 1e-6)
+    r = dict(stats)
+    r['sec'] = round(sec, 2)
+    sent = r['sent_img'] + r['sent_tindex'] + r['sent_prompt']
+    r['sent_per_s'] = round(sent / sec, 2)
+    r['img_per_s'] = round(r['recv_img'] / sec, 2)
+    r['tindex_share'] = round(r['sent_tindex'] / sent, 3) if sent else None
+    r['rtt_mean_ms'] = round(r['rtt_sum'] / r['rtt_n'] * 1000, 1) if r['rtt_n'] else None
+    return r
+
+
+stats_reset()
+
+
+def _count(key):
+    stats[key] = stats.get(key, 0) + 1
+
 
 def _encode(top, size=SIZE):
     import cv2
@@ -98,8 +132,10 @@ def _guard_open():
     now = absTime.seconds
     if _inflight:
         if now - _sent_at < TIMEOUT:
+            _count('skip')
             return False
         debug('[ws] response timeout, releasing inflight')
+        _count('timeout')
         _inflight = False
     return True
 
@@ -112,6 +148,7 @@ def send_frame(dat):
         dat.sendText(_encode(op(SRC_TOP)))
         _inflight = True
         _sent_at = absTime.seconds
+        _count('sent_img')
     except Exception as e:
         debug('send_frame err:', e)
 
@@ -125,6 +162,7 @@ def send_tindex(dat, a, b):
         _inflight = True
         _sent_at = absTime.seconds
         _last_tindex = (a, b)
+        _count('sent_tindex')
     except Exception as e:
         debug('send_tindex err:', e)
 
@@ -159,6 +197,7 @@ def send_pending_prompt(dat):
         _inflight = True
         _sent_at = _prompt_sent_at = absTime.seconds
         _pending_prompt = None
+        _count('sent_prompt')
     except Exception as e:
         debug('send_prompt err:', e)
 
@@ -178,13 +217,18 @@ def onDisconnect(dat):
 def onReceiveText(dat, rowIndex, message, *args):
     global _latest_jpg_b64, _inflight
     global _prompt_sent_at
+    if _inflight:
+        stats['rtt_sum'] = stats.get('rtt_sum', 0.0) + absTime.seconds - _sent_at
+        _count('rtt_n')
     _inflight = False
     if message.startswith('OK:') or message.startswith('ERR:'):
+        _count('recv_ok' if message.startswith('OK:') else 'recv_err')
         if message.startswith('OK:prompt') and _prompt_sent_at is not None:
             prompt_rtt.append(absTime.seconds - _prompt_sent_at)
             _prompt_sent_at = None
         debug('[ws] server:', message)
         return
+    _count('recv_img')
     _latest_jpg_b64 = message
     d = op(DST_TOP)
     if d is not None:
