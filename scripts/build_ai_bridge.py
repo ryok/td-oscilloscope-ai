@@ -75,6 +75,8 @@ _inflight = False
 _sent_at = 0.0
 TIMEOUT = 3.0
 _last_tindex = (22, 32)
+_since_tindex = 0        # 前回 TINDEX を送ってから送った画像の枚数（TINDEX を4回に1回までにする）
+DRIVER = '/project1/ai_driver'
 
 # --- 送受信の回数（README の fps の説明を実測で確かめるため） ---
 # sent_*: 実際に送れた回数 / skip: 返信待ちで送れなかったスロット / timeout: 返信が来ず枠を開けた回数
@@ -141,7 +143,7 @@ def _guard_open():
 
 
 def send_frame(dat):
-    global _inflight, _sent_at
+    global _inflight, _sent_at, _since_tindex
     if not _guard_open():
         return
     try:
@@ -149,12 +151,13 @@ def send_frame(dat):
         _inflight = True
         _sent_at = absTime.seconds
         _count('sent_img')
+        _since_tindex += 1
     except Exception as e:
         debug('send_frame err:', e)
 
 
 def send_tindex(dat, a, b):
-    global _inflight, _sent_at, _last_tindex
+    global _inflight, _sent_at, _last_tindex, _since_tindex
     if not _guard_open():
         return
     try:
@@ -163,12 +166,17 @@ def send_tindex(dat, a, b):
         _sent_at = absTime.seconds
         _last_tindex = (a, b)
         _count('sent_tindex')
+        _since_tindex = 0
     except Exception as e:
         debug('send_tindex err:', e)
 
 
 def last_ta():
     return _last_tindex[0]
+
+
+def since_tindex():
+    return _since_tindex
 
 
 # --- プロンプト差し替え（build_sections.py が使う） ---
@@ -227,12 +235,25 @@ def onReceiveText(dat, rowIndex, message, *args):
             prompt_rtt.append(absTime.seconds - _prompt_sent_at)
             _prompt_sent_at = None
         debug('[ws] server:', message)
+        _send_next(dat)
         return
     _count('recv_img')
     _latest_jpg_b64 = message
     d = op(DST_TOP)
     if d is not None:
         d.cook(force=True)
+    _send_next(dat)
+
+
+def _send_next(dat):
+    """返信を受けたその場で次を送る。フレームの送信スロットを待つと、往復が
+    スロットの間隔の倍数に切り上がる（EVERY=3 で 67ms → 100ms、毎秒10回が上限だった）。"""
+    drv = op(DRIVER)
+    if drv is not None:
+        try:
+            drv.module.tick(dat)
+        except Exception as e:
+            debug('send_next err:', e)
 
 
 def onReceiveBinary(dat, contents):
@@ -281,14 +302,16 @@ def onCook(scriptOp):
 # --- Execute DAT ai_driver: 毎フレーム osc_out を force cook + 送信（音の大きさ→TINDEX） --
 DRIVER_SRC = r'''
 # 1) 毎フレーム osc_out を force cook（残光のフィードバックを送信可否と独立に進める）
-# 2) websocket1 が Active なら EVERY フレーム毎に 1 送信スロット。
-#    音響エネルギー→t_index を算出し、有意変化かつ制御スロットなら TINDEX を、
-#    それ以外は画像フレームを送る（1スロット1送信＝in-flightガードと衝突しない）。
+# 2) 送信は tick() に集約。返信を受けた瞬間に websocket1_callbacks1 が tick() を呼んで次を送り、
+#    毎フレームの tick() は、つないだ直後やタイムアウト後に止まった流れを再開する役だけ持つ。
+#    音響エネルギー→t_index を算出し、有意に変わっていて、かつ前回の TINDEX から画像を
+#    3枚以上送っていれば TINDEX を、それ以外は画像を送る（1回に1送信＝in-flightガードと衝突しない）。
 WS = '/project1/websocket1'
 CB = '/project1/websocket1_callbacks1'
 SRC = '/project1/osc_out'
 AUD = '/project1/ai_energy'
-EVERY = 3          # 送信を試みる間隔（フレーム）。ガードがあるので小さくてよい
+EVERY = 1          # 毎フレームの tick() の間隔。返信時にも送るので、ここは止まった流れの再開用
+IMG_PER_TINDEX = 3 # TINDEX の前に送る画像の最低枚数（送信の4回に1回までを TINDEX に回す）
 # E_FLOOR〜E_FULL の RMS を 0..1 に写す（E_FLOOR 以下=最弱、E_FULL 以上=最強）。
 # ★実音量に必ず合わせること（td-organic-patterns の教訓）。波形そのものの RMS なので、
 # organic-patterns のスペクトル平均（0.003〜0.03）より桁が大きい。
@@ -322,6 +345,11 @@ def onFrameStart(frame):
         return
     if frame % EVERY != 0:
         return
+    tick(ws)
+
+
+def tick(ws):
+    """返信待ちでなければ1つ送る（プロンプト > TINDEX > 画像）。"""
     cb = op(CB).module
     # 音の大きさ（osc_lr の RMS をならしたもの）→ 0..1 正規化
     e = 0.0
@@ -336,18 +364,17 @@ def onFrameStart(frame):
         tbq, tbl = sec['tb_q'].eval(), sec['tb_l'].eval()
     ta = int(round(taq - (taq - tal) * n))
     tb = int(round(tbq - (tbq - tbl) * n))
-    # セクション切り替えのプロンプトは最優先（予約があれば今回のスロットはそれだけ送る）
+    # セクション切り替えのプロンプトは最優先（予約があれば今回はそれだけ送る）
     if cb.has_pending_prompt():
         cb.send_pending_prompt(ws)
         return
-    # 画像フレームを主に流し、TINDEXは数スロットに1回だけ相乗りさせる。
-    # ★2026-09-11の録画で判明: 画像とTINDEXは同じin-flight枠を1スロット1回で共有する。
-    #   毎回TINDEXを送ると（大音量でenergyが揺れ changed がほぼ毎回true）画像が枯れ、
-    #   ai_out が更新されず映像が静止する。slot%4 で TINDEX を1/4に間引き、画像3/4を確保。
-    #   「変調が乗らない」ときはこのゲートでなく E_FULL の校正（実音量に合わせる）で直す。
-    slot = frame // EVERY
+    # 画像とTINDEXは同じin-flight枠を共有する（2026-09-11: 毎回TINDEXを送ると画像が枯れて
+    # ai_out が静止した）。TINDEX は「前回の TINDEX から画像を IMG_PER_TINDEX 枚送った後」に限る。
+    # ★2026-10-19: 以前はフレーム番号で slot%4 を見ていたが、ガードで飛ばされるスロットと
+    #   偶奇がそろい、強さが20回変わっても TINDEX は3回しか送られなかった（X で指摘をもらい実測）。
+    #   実際に送った枚数で数える。
     changed = abs(ta - cb.last_ta()) >= 2
-    if changed and slot % 4 == 0:
+    if changed and cb.since_tindex() >= IMG_PER_TINDEX:
         cb.send_tindex(ws, ta, tb)
     else:
         cb.send_frame(ws)
