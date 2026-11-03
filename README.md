@@ -20,6 +20,7 @@
 | S3 | 曲のセクションごとにプロンプト・強さを切り替える | 済 |
 | S4 | スコープ用の曲を作る | 済 |
 | S5 | 本番録画と公開 | 済（[note](https://note.com/ryok/n/ne6f4ad7147ea)・[X](https://x.com/riokadamusic/status/2111554285326778389)） |
+| S6 | 同じ録画を SDXL＋ControlNet でオフライン変換し、リアルタイム版と比べる | 30fps 版済み・未公開 |
 
 ## 使い方
 
@@ -282,3 +283,35 @@ Arrangement に並べてある。音源は Live 標準の Operator と 909 Core 
 ## 動作環境
 
 TouchDesigner 2023.12230（macOS）で確認。
+
+## オフライン版（SDXL＋ControlNet、S6）
+
+リアルタイム版と同じ録画・同じセクションのプロンプトを、SDXL で1枚ずつ時間をかけて描かせたもの。
+uisato の Oscilloscope Diffusion（オフラインの video-to-video）に相当する比較対象として作った。
+スクリプトは [scripts/sdxl_offline.py](scripts/sdxl_offline.py)。
+
+1. `s5_final_pair.mp4` の左半分（`osc_out`）を連番にする: `ffmpeg -i reference/s5_final_pair.mp4 -vf crop=640:640:0:0 src/%05d.png`
+2. GPU サーバーで、torch・diffusers・transformers・accelerate・opencv を入れた venv を用意する（StreamDiffusion の環境とは分ける）
+3. GPU ごとに範囲を分けて回す（出力済みのコマは飛ばすので、止まっても同じコマンドで再開できる）
+   ```
+   CUDA_VISIBLE_DEVICES=0 python sdxl_offline.py --out out/full --start 1    --end 881  --step 2
+   CUDA_VISIBLE_DEVICES=1 python sdxl_offline.py --out out/full --start 883  --end 1763 --step 2
+   CUDA_VISIBLE_DEVICES=2 python sdxl_offline.py --out out/full --start 1765 --end 2646 --step 2
+   ```
+4. `ffmpeg -framerate 15 -pattern_type glob -i 'out/full/*.png' ...` で動画にし、`s5_final_pair.mp4` の音を付ける
+
+成果物（gitignore）: `reference/s6_sdxl.mp4`（1024px・30fps・88.1秒）、`reference/s6_compare.mp4`（左から元のオシロ・リアルタイム版・SDXL 版）。
+
+### 設計のポイント
+
+- **SDXL base 1.0 ＋ `diffusers/controlnet-canny-sdxl-1.0`**（VAE は `madebyollin/sdxl-vae-fp16-fix`）。1024px・25 steps・CFG 6・ControlNet の強さ 0.8。
+- **セクション境界は録画のコマで決めた**（フレーム 656 / 1311 / 1968）。計算上の 21.82 秒の倍数より約 0.1 秒遅れて切り替わっていた。
+- **ちらつき対策はセクションごとに初期ノイズを固定するだけ**（txt2img）。同じノイズから線の形だけが変わる画像を描かせるので、材質・背景・光はセクション内で揃う。細部は毎コマ変わる（隣り合うコマで折り目の本数が変わる程度）。
+- **音で強さは動かしていない**。リアルタイム版との違いを見るための、uisato と同じ「固定条件」の版。
+
+### 実装上の要点（ハマりどころ）
+
+- **オシロのフレームをそのまま制御画像にせず、canny をかける**。白線 on 黒なので一見そのまま canny の入力になりそうだが、残光・bloom のなだらかな明るさの勾配の部分に、刺繍のような毛羽だった縞が出た（芯を細くしても残った）。canny（60/160）をかけると勾配は捨てられ、二重になった線が太い帯の輪郭として効く。
+- **細い1本線（合成したリサージュ）では強さ 1.0 が要ったが、実フレームは 0.8 で足りた**。実フレームは線が太く残光もあるので、合成画像だけで値を決めない。
+- **速さは RTX 6000 Ada 1枚で 15〜19 秒/コマ**（同じ8コマで比べても GPU2 だけ約3割遅かった。原因は未調査）。奇数番号（15fps 分）と偶数番号（`--start 2 --step 2`）を2回に分けて回し、それぞれ 3 GPU で約 2 時間ずつ。2回目は遅い GPU2 の受け持ちを減らした（470/470/383 コマ）。
+- **2回に分けても交互のコマで見た目は揃う**。初期ノイズとプロンプトが同じなので、別の GPU・別の時間に描いたコマを交互に並べても、材質・背景の差は出なかった。細部のちらつきは 30fps でも残り、break では墨のしぶきが数コマだけ出ることがある。
