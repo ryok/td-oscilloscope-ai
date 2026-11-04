@@ -20,7 +20,7 @@
 | S3 | 曲のセクションごとにプロンプト・強さを切り替える | 済 |
 | S4 | スコープ用の曲を作る | 済 |
 | S5 | 本番録画と公開 | 済（[note](https://note.com/ryok/n/ne6f4ad7147ea)・[X](https://x.com/riokadamusic/status/2111554285326778389)） |
-| S6 | 同じ録画を SDXL＋ControlNet でオフライン変換し、リアルタイム版と比べる | 30fps 版済み・未公開 |
+| S6 | 同じ録画を SDXL＋ControlNet でオフライン変換し、リアルタイム版と比べる | 済（[note](https://note.com/ryok/n/n45822f0bad45)・[X](https://x.com/riokadamusic/status/2118078109312516540)） |
 
 ## 使い方
 
